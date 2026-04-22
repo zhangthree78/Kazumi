@@ -48,19 +48,50 @@ class _SourceSheetState extends State<SourceSheet>
   /// Timeout timer waiting for captcha verification result
   Timer? _captchaVerifyTimer;
 
+  void _handleQueryStateChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<void> _loadMoreSources() async {
+    if (queryManager == null || queryManager!.isLoading) return;
+    await queryManager!.queryNextBatch(keyword);
+  }
+
+  Widget _buildContinueLoadButton() {
+    final canLoadMore =
+        queryManager != null &&
+        (queryManager!.hasMorePluginsToLoad || queryManager!.isLoading);
+    if (!canLoadMore) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(right: 4),
+      child: TextButton(
+        onPressed: queryManager!.isLoading ? null : _loadMoreSources,
+        child: Text(queryManager!.isLoading ? '加载中' : '继续加载'),
+      ),
+    );
+  }
+
   @override
   void initState() {
+    super.initState();
     keyword = widget.infoController.bangumiItem.nameCn == ''
         ? widget.infoController.bangumiItem.name
         : widget.infoController.bangumiItem.nameCn;
-    queryManager = QueryManager(infoController: widget.infoController);
+    queryManager = QueryManager(
+      infoController: widget.infoController,
+      onStateChanged: _handleQueryStateChanged,
+    );
     queryManager?.queryAllSource(keyword);
-    super.initState();
   }
 
   @override
   void dispose() {
-    queryManager?.cancel();
+    queryManager?.cancel(notify: false);
     queryManager = null;
     _captchaProvider?.dispose();
     _captchaProvider = null;
@@ -368,8 +399,18 @@ class _SourceSheetState extends State<SourceSheet>
   }
 
   Widget buildPluginView(Plugin plugin, List<Widget> cardList) {
-    final status =
-        widget.infoController.pluginSearchStatus[plugin.name];
+    final status = widget.infoController.pluginSearchStatus[plugin.name];
+    if (status == 'idle') {
+      return GeneralErrorWidget(
+        errMsg: '${plugin.name} 尚未加载，当前会按插件顺序分批检索',
+        actions: [
+          GeneralErrorButton(
+            onPressed: () => queryManager?.querySource(keyword, plugin.name),
+            text: '加载此插件',
+          ),
+        ],
+      );
+    }
     if (status == 'pending') {
       return const Center(child: CircularProgressIndicator());
     }
@@ -613,6 +654,7 @@ class _SourceSheetState extends State<SourceSheet>
                   },
                   icon: const Icon(Icons.open_in_browser_rounded),
                 ),
+                _buildContinueLoadButton(),
                 const SizedBox(width: 4),
               ],
             ),
