@@ -59,15 +59,31 @@ class AudioFeatureSequence {
 }
 
 class AudioSlidingMatchOptions {
+  /// Fine search step in feature frames.
   final int stepFrames;
+  final int coarseStepFrames;
+  final int refineRadiusFrames;
+  final int coarseCandidateCount;
 
   const AudioSlidingMatchOptions({
     this.stepFrames = 1,
+    this.coarseStepFrames = 5,
+    this.refineRadiusFrames = 8,
+    this.coarseCandidateCount = 5,
   });
 
   void validate() {
     if (stepFrames <= 0) {
       throw ArgumentError.value(stepFrames, 'stepFrames');
+    }
+    if (coarseStepFrames <= 0) {
+      throw ArgumentError.value(coarseStepFrames, 'coarseStepFrames');
+    }
+    if (refineRadiusFrames < 0) {
+      throw ArgumentError.value(refineRadiusFrames, 'refineRadiusFrames');
+    }
+    if (coarseCandidateCount <= 0) {
+      throw ArgumentError.value(coarseCandidateCount, 'coarseCandidateCount');
     }
   }
 }
@@ -313,25 +329,72 @@ class AudioSlidingMatcher {
           'template and search must use the same sample rate and hop size');
     }
 
-    var bestScore = double.negativeInfinity;
-    var secondBestScore = double.negativeInfinity;
-    var bestOffset = 0;
     final maxOffset = search.frames.length - template.frames.length;
+    final scoredOffsets = <int, double>{};
+    final coarseCandidates = <_ScoredOffset>[];
 
-    for (var offset = 0; offset <= maxOffset; offset += options.stepFrames) {
+    void scoreCoarseOffset(int offset) {
+      if (offset < 0 ||
+          offset > maxOffset ||
+          scoredOffsets.containsKey(offset)) {
+        return;
+      }
       final score = _scoreAtOffset(template.frames, search.frames, offset);
-      if (score > bestScore) {
-        if ((offset - bestOffset).abs() > template.frames.length ~/ 4) {
-          secondBestScore = bestScore;
-        }
-        bestScore = score;
-        bestOffset = offset;
-      } else if ((offset - bestOffset).abs() > template.frames.length ~/ 4 &&
-          score > secondBestScore) {
-        secondBestScore = score;
+      scoredOffsets[offset] = score;
+      _addCoarseCandidate(
+        coarseCandidates,
+        _ScoredOffset(offset, score),
+        options.coarseCandidateCount,
+      );
+    }
+
+    void scoreFineOffset(int offset) {
+      if (offset < 0 ||
+          offset > maxOffset ||
+          scoredOffsets.containsKey(offset)) {
+        return;
+      }
+      scoredOffsets[offset] =
+          _scoreAtOffset(template.frames, search.frames, offset);
+    }
+
+    for (var offset = 0;
+        offset <= maxOffset;
+        offset += options.coarseStepFrames) {
+      scoreCoarseOffset(offset);
+    }
+    scoreCoarseOffset(maxOffset);
+
+    final refineRadius =
+        max(options.refineRadiusFrames, options.coarseStepFrames);
+    for (final candidate in List<_ScoredOffset>.of(coarseCandidates)) {
+      final start = max(0, candidate.offset - refineRadius);
+      final end = min(maxOffset, candidate.offset + refineRadius);
+      for (var offset = start; offset <= end; offset += options.stepFrames) {
+        scoreFineOffset(offset);
+      }
+      scoreFineOffset(end);
+    }
+
+    var bestScore = double.negativeInfinity;
+    var bestOffset = 0;
+    for (final entry in scoredOffsets.entries) {
+      if (entry.value > bestScore) {
+        bestScore = entry.value;
+        bestOffset = entry.key;
       }
     }
 
+    var secondBestScore = double.negativeInfinity;
+    final exclusionRadius = max(1, template.frames.length ~/ 4);
+    for (final entry in scoredOffsets.entries) {
+      if ((entry.key - bestOffset).abs() <= exclusionRadius) {
+        continue;
+      }
+      if (entry.value > secondBestScore) {
+        secondBestScore = entry.value;
+      }
+    }
     if (secondBestScore == double.negativeInfinity) {
       secondBestScore = bestScore;
     }
@@ -364,6 +427,25 @@ class AudioSlidingMatcher {
     }
     return sum / count;
   }
+
+  static void _addCoarseCandidate(
+    List<_ScoredOffset> candidates,
+    _ScoredOffset candidate,
+    int limit,
+  ) {
+    candidates.add(candidate);
+    candidates.sort((a, b) => b.score.compareTo(a.score));
+    if (candidates.length > limit) {
+      candidates.removeRange(limit, candidates.length);
+    }
+  }
+}
+
+class _ScoredOffset {
+  final int offset;
+  final double score;
+
+  const _ScoredOffset(this.offset, this.score);
 }
 
 class _BandRange {

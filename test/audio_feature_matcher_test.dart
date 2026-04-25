@@ -42,6 +42,51 @@ void main() {
       expect(result.score, greaterThan(0.85));
     });
 
+    test('coarse search refines to the exhaustive match offset', () {
+      const sampleRate = 8000;
+      const insertSeconds = 9.2;
+      final template = _buildTemplate(sampleRate, seconds: 8);
+      final search = _buildSearch(sampleRate, seconds: 28);
+      final insertSample = (insertSeconds * sampleRate).round();
+
+      for (var i = 0; i < template.length; i++) {
+        search[insertSample + i] += template[i] * 0.75;
+      }
+
+      final extractor = AudioFeatureExtractor(
+        options: const AudioFeatureExtractorOptions(
+          sampleRate: sampleRate,
+          frameSize: 1024,
+          hopSize: 400,
+          bandCount: 20,
+          minFrequency: 80,
+          maxFrequency: 3600,
+        ),
+      );
+      final templateFeatures = extractor.extractFromSamples(template);
+      final searchFeatures = extractor.extractFromSamples(search);
+
+      final exhaustive = const AudioSlidingMatcher(
+        options: AudioSlidingMatchOptions(
+          coarseStepFrames: 1,
+          refineRadiusFrames: 0,
+        ),
+      ).findBestMatch(templateFeatures, searchFeatures);
+      final coarseFine = const AudioSlidingMatcher(
+        options: AudioSlidingMatchOptions(
+          coarseStepFrames: 7,
+          refineRadiusFrames: 10,
+          coarseCandidateCount: 3,
+        ),
+      ).findBestMatch(templateFeatures, searchFeatures);
+
+      expect(
+        coarseFine.offset.inMilliseconds,
+        closeTo(exhaustive.offset.inMilliseconds, 50),
+      );
+      expect(coarseFine.score, closeTo(exhaustive.score, 1e-9));
+    });
+
     test('extracts features from little-endian PCM16 bytes', () {
       final bytes = Uint8List(4096);
       final data = ByteData.sublistView(bytes);
