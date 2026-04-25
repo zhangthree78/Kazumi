@@ -194,6 +194,8 @@ abstract class _PlayerController with Store {
   ResolvedSkipSegment? resolvedOpeningSegment;
   ResolvedSkipSegment? resolvedEndingSegment;
   bool skipSegmentResolving = false;
+  bool openingSegmentAutoSkipped = false;
+  bool endingSegmentAutoSkipped = false;
 
   // 播放器实时状态
   bool get playerPlaying => mediaPlayer!.state.playing;
@@ -251,6 +253,8 @@ abstract class _PlayerController with Store {
     resolvedOpeningSegment = null;
     resolvedEndingSegment = null;
     skipSegmentResolving = false;
+    openingSegmentAutoSkipped = false;
+    endingSegmentAutoSkipped = false;
 
     KazumiLogger().i(
         'PlayerController: ${params.isLocalPlayback ? "local" : "online"} playback, url: ${params.videoUrl}');
@@ -668,8 +672,35 @@ abstract class _PlayerController with Store {
     switch (type) {
       case SkipSegmentType.opening:
         resolvedOpeningSegment = null;
+        openingSegmentAutoSkipped = false;
       case SkipSegmentType.ending:
         resolvedEndingSegment = null;
+        endingSegmentAutoSkipped = false;
+    }
+  }
+
+  bool isSkipSegmentAutoSkipped(SkipSegmentType type) {
+    return switch (type) {
+      SkipSegmentType.opening => openingSegmentAutoSkipped,
+      SkipSegmentType.ending => endingSegmentAutoSkipped,
+    };
+  }
+
+  void markSkipSegmentAutoSkipped(SkipSegmentType type) {
+    switch (type) {
+      case SkipSegmentType.opening:
+        openingSegmentAutoSkipped = true;
+      case SkipSegmentType.ending:
+        endingSegmentAutoSkipped = true;
+    }
+  }
+
+  void resetSkipSegmentAutoSkipped(SkipSegmentType type) {
+    switch (type) {
+      case SkipSegmentType.opening:
+        openingSegmentAutoSkipped = false;
+      case SkipSegmentType.ending:
+        endingSegmentAutoSkipped = false;
     }
   }
 

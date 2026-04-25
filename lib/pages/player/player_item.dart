@@ -808,6 +808,7 @@ class _PlayerItemState extends State<PlayerItem>
         unawaited(videoPageController
             .resolveCurrentSkipSegmentsIfNeeded(playerController.duration));
       }
+      unawaited(_autoSkipResolvedSegmentIfNeeded());
       // 弹幕相关
       if (playerController.currentPosition.inMicroseconds != 0 &&
           playerController.playerPlaying == true &&
@@ -911,6 +912,59 @@ class _PlayerItemState extends State<PlayerItem>
       // 一起去看相关
       playerController.setSyncPlayCurrentPosition();
     });
+  }
+
+  Future<void> _autoSkipResolvedSegmentIfNeeded() async {
+    if (!playerController.playerPlaying ||
+        playerController.playerBuffering ||
+        playerController.duration <= Duration.zero) {
+      return;
+    }
+
+    final position = playerController.currentPosition;
+    final opening = playerController.resolvedOpeningSegment;
+    if (_shouldAutoSkipSegment(opening, position)) {
+      await _autoSkipSegment(opening!);
+      return;
+    }
+
+    final ending = playerController.resolvedEndingSegment;
+    if (_shouldAutoSkipSegment(ending, position)) {
+      await _autoSkipSegment(ending!);
+    }
+  }
+
+  bool _shouldAutoSkipSegment(
+    ResolvedSkipSegment? segment,
+    Duration position,
+  ) {
+    if (segment == null || !segment.isValid) return false;
+    if (playerController.isSkipSegmentAutoSkipped(segment.type)) return false;
+    if (segment.end > playerController.duration) return false;
+    return position >= segment.start && position < segment.end;
+  }
+
+  Future<void> _autoSkipSegment(ResolvedSkipSegment segment) async {
+    playerController.markSkipSegmentAutoSkipped(segment.type);
+    final label = switch (segment.type) {
+      SkipSegmentType.opening => 'opening',
+      SkipSegmentType.ending => 'ending',
+    };
+    final message =
+        'SkipSegment: auto skipped $label ${Utils.durationToString(segment.start)} - ${Utils.durationToString(segment.end)}';
+    playerController.playerLog.add(message);
+    KazumiLogger().i(message);
+
+    try {
+      await playerController.seek(segment.end);
+    } catch (e, stackTrace) {
+      playerController.resetSkipSegmentAutoSkipped(segment.type);
+      KazumiLogger().w(
+        'SkipSegment: failed to auto skip $label',
+        error: e,
+        stackTrace: stackTrace,
+      );
+    }
   }
 
   void showDanmakuSearchDialog(String keyword) async {
