@@ -377,6 +377,7 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
           );
           unawaited(videoPageController.refreshSkipSegmentsAfterTemplateChanged(
             playerController.duration,
+            type,
           ));
         } catch (e) {
           KazumiDialog.showToast(message: e.toString());
@@ -391,6 +392,7 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
     KazumiDialog.showToast(message: '已清除${_skipSegmentTypeLabel(type)}模板');
     unawaited(videoPageController.refreshSkipSegmentsAfterTemplateChanged(
       playerController.duration,
+      type,
     ));
   }
 

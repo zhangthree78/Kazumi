@@ -664,6 +664,15 @@ abstract class _PlayerController with Store {
     }
   }
 
+  void clearResolvedSkipSegment(SkipSegmentType type) {
+    switch (type) {
+      case SkipSegmentType.opening:
+        resolvedOpeningSegment = null;
+      case SkipSegmentType.ending:
+        resolvedEndingSegment = null;
+    }
+  }
+
   String _skipSegmentTypeName(SkipSegmentType type) {
     return switch (type) {
       SkipSegmentType.opening => '片头',

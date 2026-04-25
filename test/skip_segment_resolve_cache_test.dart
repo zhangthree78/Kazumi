@@ -52,5 +52,51 @@ void main() {
       expect(cache.get(openingKey), isNull);
       expect(cache.get(endingKey), isNull);
     });
+
+    test('clears one resolved segment type without touching the other', () {
+      final cache = SkipSegmentResolveCache();
+      final openingKey = const SkipSegmentResolveCacheKey(
+        bangumiId: 1,
+        pluginName: 'test',
+        episode: 2,
+        type: SkipSegmentType.opening,
+      );
+      final endingKey = const SkipSegmentResolveCacheKey(
+        bangumiId: 1,
+        pluginName: 'test',
+        episode: 2,
+        type: SkipSegmentType.ending,
+      );
+
+      const openingSegment = ResolvedSkipSegment(
+        type: SkipSegmentType.opening,
+        start: Duration(seconds: 30),
+        end: Duration(seconds: 120),
+        score: 0.9,
+        confidence: 0.95,
+        sourceEpisode: 1,
+      );
+      const endingSegment = ResolvedSkipSegment(
+        type: SkipSegmentType.ending,
+        start: Duration(minutes: 21),
+        end: Duration(minutes: 22, seconds: 30),
+        score: 0.9,
+        confidence: 0.95,
+        sourceEpisode: 1,
+      );
+
+      cache.put(openingKey, openingSegment);
+      cache.put(endingKey, endingSegment);
+
+      cache.clearEpisodeType(
+        bangumiId: 1,
+        pluginName: 'test',
+        episode: 2,
+        type: SkipSegmentType.ending,
+      );
+
+      expect(cache.get(openingKey), openingSegment);
+      expect(cache.get(endingKey), isNull);
+    });
   });
 }

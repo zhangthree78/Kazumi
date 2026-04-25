@@ -32,6 +32,12 @@ part 'video_controller.g.dart';
 
 class VideoPageController = _VideoPageController with _$VideoPageController;
 
+enum _SkipSegmentLogLevel {
+  debug,
+  info,
+  warning,
+}
+
 abstract class _VideoPageController with Store {
   late BangumiItem bangumiItem;
   EpisodeInfo episodeInfo = EpisodeInfo.fromTemplate();
@@ -113,10 +119,26 @@ abstract class _VideoPageController with Store {
 
   Stream<String> get logStream => _logStreamController.stream;
 
-  void _logSkipSegment(String message) {
-    KazumiLogger().i(message);
-    if (!_logStreamController.isClosed) {
-      _logStreamController.add(message);
+  void _logSkipSegment(
+    String message, {
+    _SkipSegmentLogLevel level = _SkipSegmentLogLevel.debug,
+    Object? error,
+    StackTrace? stackTrace,
+  }) {
+    switch (level) {
+      case _SkipSegmentLogLevel.debug:
+        KazumiLogger().d(message, error: error, stackTrace: stackTrace);
+      case _SkipSegmentLogLevel.info:
+        KazumiLogger().i(message, error: error, stackTrace: stackTrace);
+      case _SkipSegmentLogLevel.warning:
+        KazumiLogger().w(message, error: error, stackTrace: stackTrace);
+    }
+
+    try {
+      final playerController = Modular.get<PlayerController>();
+      playerController.playerLog.add(message);
+    } catch (_) {
+      // PlayerController can be unavailable before playback is initialized.
     }
   }
 
@@ -365,8 +387,18 @@ abstract class _VideoPageController with Store {
 
     final episode = actualEpisodeNumber;
     if (_currentSkipResolvedEpisode == episode) return;
-    _currentSkipResolvedEpisode = episode;
+    final pluginName = _skipSegmentPluginName;
+    final typesWithTemplates =
+        _skipSegmentTypesWithTemplates(pluginName: pluginName);
+    if (typesWithTemplates.isEmpty) {
+      _currentSkipResolvedEpisode = episode;
+      _logSkipSegment(
+        'SkipSegment: skip resolving current episode $episode, no templates',
+      );
+      return;
+    }
 
+    _currentSkipResolvedEpisode = episode;
     final generation = _skipSegmentResolveGeneration;
     final playerController = Modular.get<PlayerController>();
     playerController.skipSegmentResolving = true;
@@ -386,15 +418,16 @@ abstract class _VideoPageController with Store {
         targetDuration: targetDuration,
         applyToCurrentPlayer: true,
         generation: generation,
+        types: typesWithTemplates,
       );
       _logSkipSegment(
         'SkipSegment: finished resolving current episode $episode '
         'generation=$generation',
       );
     } catch (e, stackTrace) {
-      _logSkipSegment('SkipSegment: failed to resolve current episode');
-      KazumiLogger().w(
+      _logSkipSegment(
         'SkipSegment: failed to resolve current episode',
+        level: _SkipSegmentLogLevel.warning,
         error: e,
         stackTrace: stackTrace,
       );
@@ -404,53 +437,112 @@ abstract class _VideoPageController with Store {
       }
     }
 
-    _preResolveNextSkipSegmentsWithHint(playerController, targetDuration);
+    if (typesWithTemplates.contains(SkipSegmentType.opening)) {
+      _preResolveNextSkipSegmentsWithHint(playerController, targetDuration);
+    }
   }
 
   Future<void> refreshSkipSegmentsAfterTemplateChanged(
     Duration targetDuration,
+    SkipSegmentType changedType,
   ) async {
     if (targetDuration <= Duration.zero || loading) return;
 
     _skipSegmentResolveGeneration++;
-    _currentSkipResolvedEpisode = null;
     _nextSkipPreResolvedEpisode = null;
 
     final pluginName = isOfflineMode ? _offlinePluginName : currentPlugin.name;
     final currentEpisode = actualEpisodeNumber;
     final playerController = Modular.get<PlayerController>();
-    playerController.resolvedOpeningSegment = null;
-    playerController.resolvedEndingSegment = null;
+    playerController.clearResolvedSkipSegment(changedType);
     _logSkipSegment(
       'SkipSegment: template changed, refresh resolve state '
-      'episode=$currentEpisode generation=$_skipSegmentResolveGeneration',
+      'episode=$currentEpisode type=${changedType.name} '
+      'generation=$_skipSegmentResolveGeneration',
+      level: _SkipSegmentLogLevel.info,
     );
 
-    skipSegmentResolveCache.clearEpisode(
+    skipSegmentResolveCache.clearEpisodeType(
       bangumiId: bangumiItem.id,
       pluginName: pluginName,
       episode: currentEpisode,
+      type: changedType,
     );
 
     final nextEpisode = _nextEpisodeNumber();
     if (nextEpisode != null) {
-      skipSegmentResolveCache.clearEpisode(
+      skipSegmentResolveCache.clearEpisodeType(
         bangumiId: bangumiItem.id,
         pluginName: pluginName,
         episode: nextEpisode,
+        type: changedType,
       );
       _logSkipSegment(
-        'SkipSegment: cleared resolve cache for current episode '
-        '$currentEpisode and next episode $nextEpisode',
+        'SkipSegment: cleared ${changedType.name} resolve cache for current '
+        'episode $currentEpisode and next episode $nextEpisode',
       );
     } else {
       _logSkipSegment(
-        'SkipSegment: cleared resolve cache for current episode '
-        '$currentEpisode, no next episode to pre-resolve',
+        'SkipSegment: cleared ${changedType.name} resolve cache for current '
+        'episode $currentEpisode, no next episode to pre-resolve',
       );
     }
 
-    await resolveCurrentSkipSegmentsIfNeeded(targetDuration);
+    final remainingTypes =
+        _skipSegmentTypesWithTemplates(pluginName: pluginName, types: [
+      changedType,
+    ]);
+    if (remainingTypes.isEmpty) {
+      _logSkipSegment(
+        'SkipSegment: skip refresh resolve for episode $currentEpisode, '
+        'no ${changedType.name} template remains',
+      );
+      return;
+    }
+
+    await _resolveChangedSkipSegment(
+      targetDuration: targetDuration,
+      changedType: changedType,
+    );
+  }
+
+  Future<void> _resolveChangedSkipSegment({
+    required Duration targetDuration,
+    required SkipSegmentType changedType,
+  }) async {
+    final episode = actualEpisodeNumber;
+    final generation = _skipSegmentResolveGeneration;
+    final playerController = Modular.get<PlayerController>();
+    playerController.skipSegmentResolving = true;
+
+    try {
+      await _resolveSkipSegmentsForEpisode(
+        targetEpisode: episode,
+        targetSource: SkipSegmentAudioSource(
+          input: playerController.videoUrl,
+          httpHeaders: _currentHttpHeaders(),
+        ),
+        targetDuration: targetDuration,
+        applyToCurrentPlayer: true,
+        generation: generation,
+        types: [changedType],
+      );
+    } catch (e, stackTrace) {
+      _logSkipSegment(
+        'SkipSegment: failed to refresh ${changedType.name} for current episode',
+        level: _SkipSegmentLogLevel.warning,
+        error: e,
+        stackTrace: stackTrace,
+      );
+    } finally {
+      if (generation == _skipSegmentResolveGeneration) {
+        playerController.skipSegmentResolving = false;
+      }
+    }
+
+    if (changedType == SkipSegmentType.opening) {
+      _preResolveNextSkipSegmentsWithHint(playerController, targetDuration);
+    }
   }
 
   void _preResolveNextSkipSegmentsWithHint(
@@ -458,6 +550,10 @@ abstract class _VideoPageController with Store {
     Duration? targetDurationHint,
   ) {
     if (targetDurationHint == null || targetDurationHint <= Duration.zero) {
+      return;
+    }
+    if (!_hasSkipSegmentTemplate(SkipSegmentType.opening)) {
+      _logSkipSegment('SkipSegment: skip pre-resolve, no opening template');
       return;
     }
     final nextEpisode = _nextEpisodeNumber();
@@ -513,9 +609,9 @@ abstract class _VideoPageController with Store {
           'generation=$generation',
         );
       } catch (e, stackTrace) {
-        _logSkipSegment('SkipSegment: failed to pre-resolve next episode');
-        KazumiLogger().w(
+        _logSkipSegment(
           'SkipSegment: failed to pre-resolve next episode',
+          level: _SkipSegmentLogLevel.warning,
           error: e,
           stackTrace: stackTrace,
         );
@@ -642,6 +738,7 @@ abstract class _VideoPageController with Store {
         'SkipSegment: resolved ${type.name} for episode $targetEpisode '
         '${Utils.durationToString(resolved.start)} - ${Utils.durationToString(resolved.end)} '
         'score=${resolved.score.toStringAsFixed(3)}',
+        level: _SkipSegmentLogLevel.info,
       );
     }
   }
@@ -664,7 +761,15 @@ abstract class _VideoPageController with Store {
 
   Future<VideoSource?> _resolveEpisodeSourceForSkip(int episode) async {
     final cached = _skipEpisodeSourceCache[episode];
-    if (cached != null) return cached;
+    if (cached != null && _isSkipVideoSourceCacheUsable(cached)) {
+      return cached;
+    }
+    if (cached != null) {
+      _skipEpisodeSourceCache.remove(episode);
+      _logSkipSegment(
+        'SkipSegment: discarded expired cached source for episode $episode',
+      );
+    }
 
     if (isOfflineMode) {
       final localPath = _getLocalVideoPath(
@@ -703,6 +808,33 @@ abstract class _VideoPageController with Store {
     }
   }
 
+  bool _isSkipVideoSourceCacheUsable(VideoSource source) {
+    if (source.type == VideoSourceType.cached) return true;
+
+    final expiresAt = _signedUrlExpiresAt(source.url);
+    if (expiresAt == null) return true;
+
+    return expiresAt.isAfter(
+      DateTime.now().toUtc().add(const Duration(minutes: 5)),
+    );
+  }
+
+  DateTime? _signedUrlExpiresAt(String input) {
+    final uri = Uri.tryParse(input);
+    if (uri == null) return null;
+
+    final expires = uri.queryParameters['x-expires'];
+    if (expires == null) return null;
+
+    final seconds = int.tryParse(expires);
+    if (seconds == null) return null;
+
+    return DateTime.fromMillisecondsSinceEpoch(
+      seconds * Duration.millisecondsPerSecond,
+      isUtc: true,
+    );
+  }
+
   String _buildEpisodePageUrl(int episode) {
     return currentPlugin.buildFullUrl(roadList[currentRoad].data[episode - 1]);
   }
@@ -715,6 +847,31 @@ abstract class _VideoPageController with Store {
     }
     if (currentEpisode >= roadList[currentRoad].data.length) return null;
     return currentEpisode + 1;
+  }
+
+  String get _skipSegmentPluginName {
+    return isOfflineMode ? _offlinePluginName : currentPlugin.name;
+  }
+
+  bool _hasSkipSegmentTemplate(SkipSegmentType type, {String? pluginName}) {
+    return skipSegmentRepository.getTemplate(
+          bangumiId: bangumiItem.id,
+          pluginName: pluginName ?? _skipSegmentPluginName,
+          type: type,
+        ) !=
+        null;
+  }
+
+  List<SkipSegmentType> _skipSegmentTypesWithTemplates({
+    String? pluginName,
+    Iterable<SkipSegmentType> types = SkipSegmentType.values,
+  }) {
+    return types
+        .where((type) => _hasSkipSegmentTemplate(
+              type,
+              pluginName: pluginName,
+            ))
+        .toList();
   }
 
   Map<String, String> _currentHttpHeaders() {

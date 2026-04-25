@@ -51,6 +51,19 @@ class SkipSegmentResolveCache {
         key.episode == episode);
   }
 
+  void clearEpisodeType({
+    required int bangumiId,
+    required String pluginName,
+    required int episode,
+    required SkipSegmentType type,
+  }) {
+    _items.removeWhere((key, value) =>
+        key.bangumiId == bangumiId &&
+        key.pluginName == pluginName &&
+        key.episode == episode &&
+        key.type == type);
+  }
+
   void clear() {
     _items.clear();
   }
