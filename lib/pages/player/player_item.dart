@@ -957,6 +957,7 @@ class _PlayerItemState extends State<PlayerItem>
 
     try {
       await playerController.seek(segment.end);
+      KazumiDialog.showToast(message: '已跳过${_skipSegmentLabel(segment.type)}');
     } catch (e, stackTrace) {
       playerController.resetSkipSegmentAutoSkipped(segment.type);
       KazumiLogger().w(
@@ -965,6 +966,13 @@ class _PlayerItemState extends State<PlayerItem>
         stackTrace: stackTrace,
       );
     }
+  }
+
+  String _skipSegmentLabel(SkipSegmentType type) {
+    return switch (type) {
+      SkipSegmentType.opening => '片头',
+      SkipSegmentType.ending => '片尾',
+    };
   }
 
   void showDanmakuSearchDialog(String keyword) async {
